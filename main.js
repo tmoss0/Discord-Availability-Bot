@@ -155,12 +155,13 @@ function createPollButtons(options, pollId) {
 
     for (let j = i; j < Math.min(i + buttonsPerRow, options.length); j++) {
       const option = options[j];
-      const emoji = option.split(' ')[0]; // Extract emoji from option
+      const [emoji, ...dayParts] = option.split(' ');
+      const day = dayParts.join(' '); // Get the day name (e.g., "Monday")
 
       row.addComponents(
         new ButtonBuilder()
           .setCustomId(`poll_${pollId}_${j}`)
-          .setLabel(`${j + 1}`)
+          .setLabel(day) // Show the day name as the label
           .setEmoji(emoji)
           .setStyle(ButtonStyle.Primary)
       );
