@@ -13,13 +13,13 @@ const POLL_CONFIG = {
   pollDuration: 24 * 60 * 60 * 1000, // 24 hours
   defaultPollQuestion: 'What days are you available this week?',
   defaultPollOptions: [
-    '📅 Monday',
-    '📅 Tuesday',
-    '📅 Wednesday',
-    '📅 Thursday',
-    '📅 Friday',
-    '📅 Saturday',
-    '📅 Sunday',
+    '1️⃣ Monday',
+    '2️⃣ Tuesday',
+    '3️⃣ Wednesday',
+    '4️⃣ Thursday',
+    '5️⃣ Friday',
+    '6️⃣ Saturday',
+    '7️⃣ Sunday',
     '❌ Unavailable',
   ],
   multipleChoice: true,
@@ -94,21 +94,19 @@ async function createWeeklyPoll() {
     });
 
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
-
-    console.log(`✅ Weekly poll created with ID: ${pollId}`);
   } catch (error) {
     console.error('❌ Error creating weekly poll:', error);
   }
 }
 
-function createPollEmbed(pollData, pollId) {
+function createPollEmbed(pollData) {
   const embed = new EmbedBuilder()
     .setTitle('📊 Weekly Availability Poll')
     .setDescription(pollData.question)
     .setColor('#0099ff')
     .setTimestamp()
     .setFooter({
-      text: `Poll ID: ${pollId} ${pollData.multipleChoice ? '• Multiple choices allowed' : '• Single choice only'}`,
+      text: `${pollData.multipleChoice ? '• Multiple choices allowed' : '• Single choice only'}`,
     });
 
   pollData.options.forEach((option, index) => {
@@ -325,8 +323,7 @@ function createResultsEmbed(pollData, pollId) {
     .setTitle('Availability Poll Results')
     .setDescription(pollData.question)
     .setColor('#00ff00')
-    .setTimestamp()
-    .setFooter({ text: `Poll ID: ${pollId}` });
+    .setTimestamp();
 
   // Calculate results
   const voteCounts = new Array(pollData.options.length).fill(0);
@@ -366,15 +363,6 @@ function createResultsEmbed(pollData, pollId) {
   });
 
   return embed;
-}
-
-function createProgressBar(votes, totalVotes, length = 10) {
-  if (totalVotes === 0) return '▱'.repeat(length);
-
-  const filled = Math.round((votes / totalVotes) * length);
-  const empty = length - filled;
-
-  return '▰'.repeat(filled) + '▱'.repeat(empty);
 }
 
 client.on('interactionCreate', async (interaction) => {
