@@ -9,7 +9,7 @@ const botToken = process.env.BOT_TOKEN;
 const activePolls = new Map();
 const POLL_CONFIG = {
   channelId: process.env.CHANNEL_ID,
-  weeklySchedule: '0 12 * * 1', // Every Monday at 12:00 PM
+  weeklySchedule: '0 12 * * 1', // Every Monday at 8:00 PM
   pollDuration: 24 * 60 * 60 * 1000, // 24 hours
   defaultPollQuestion: 'What days are you available this week?',
   defaultPollOptions: [
