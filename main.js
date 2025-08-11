@@ -1,5 +1,4 @@
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const cron = require('node-cron');
 require('dotenv').config();
 
 const client = new Client({
@@ -9,7 +8,6 @@ const botToken = process.env.BOT_TOKEN;
 const activePolls = new Map();
 const POLL_CONFIG = {
   channelId: process.env.CHANNEL_ID,
-  weeklySchedule: '0 12 * * 1', // Every Monday at 8:00 PM
   pollDuration: 24 * 60 * 60 * 1000, // 24 hours
   defaultPollQuestion: 'What days are you available this week?',
   defaultPollOptions: [
@@ -28,7 +26,6 @@ const POLL_CONFIG = {
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
   await registerAvailabilityCommand();
-  scheduleWeeklyPolls();
 });
 
 async function registerAvailabilityCommand() {
@@ -49,17 +46,6 @@ async function registerAvailabilityCommand() {
   } catch (error) {
     console.error('Error registering availability command:', error);
   }
-}
-
-function scheduleWeeklyPolls() {
-  console.log('Scheduling weekly polls...');
-
-  cron.schedule(POLL_CONFIG.weeklySchedule, async () => {
-    console.log('Creating scheduled weekly poll...');
-    await createWeeklyPoll();
-  });
-
-  console.log(`📅 Weekly polls scheduled for: ${POLL_CONFIG.weeklySchedule}`);
 }
 
 async function createWeeklyPoll() {
