@@ -4,7 +4,7 @@
   "description": "A Discord bot for managing weekly polls.",
   "main": "main.js",
   "scripts": {
-    "start": "npm install",
+    "start": "npm install && node main.js",
     "dev": "nodemon main.js"
   },
   "author": "Tim Moss",

@@ -26,6 +26,7 @@ const POLL_CONFIG = {
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
   await registerAvailabilityCommand();
+  await createWeeklyPoll();
 });
 
 async function registerAvailabilityCommand() {
