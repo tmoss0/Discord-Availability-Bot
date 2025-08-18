@@ -4,6 +4,13 @@ require('dotenv').config();
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
+
+if (!process.env.BOT_TOKEN) {
+  console.error('❌ BOT_TOKEN environment variable is required!');
+  console.error('Please set your Discord bot token in the .env file or environment variables.');
+  process.exit(1);
+}
+
 const botToken = process.env.BOT_TOKEN;
 const activePolls = new Map();
 const POLL_CONFIG = {
@@ -51,9 +58,15 @@ async function registerAvailabilityCommand() {
 
 async function createWeeklyPoll() {
   try {
+    if (!POLL_CONFIG.channelId) {
+      console.log('⚠️  CHANNEL_ID not configured. Skipping automatic weekly poll creation.');
+      console.log('Use the /availability command to create polls manually.');
+      return;
+    }
+
     const channel = client.channels.cache.get(POLL_CONFIG.channelId);
     if (!channel) {
-      console.error('Channel not found!');
+      console.error('❌ Channel not found! Please check your CHANNEL_ID configuration.');
       return;
     }
 
