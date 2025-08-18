@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node main.js",
     "dev": "nodemon main.js",
-    "install-deps": "npm install"
+    "install-deps": "npm install",
+    "install-prod": "npm ci --omit=dev"
   },
   "author": "Tim Moss",
   "license": "MIT",
