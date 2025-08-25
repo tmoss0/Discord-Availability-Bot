@@ -4,7 +4,7 @@ A Discord bot that creates weekly availability polls automatically.
 
 ## Features
 
-- Automated weekly polls dependending on Cron schedule
+- Automated weekly polls depending on Cron schedule
 - Multiple choice voting
 - Real-time vote tracking
 - Shows who voted for what
