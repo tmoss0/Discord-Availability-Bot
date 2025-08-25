@@ -30,6 +30,15 @@ const POLL_CONFIG = {
   multipleChoice: true,
 };
 
+function findActivePollIdByChannel(channelId) {
+  for (const [existingPollId, pollData] of activePolls.entries()) {
+    if (pollData.channelId === channelId && Date.now() < pollData.endTime) {
+      return existingPollId;
+    }
+  }
+  return null;
+}
+
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
   await registerAvailabilityCommand();
@@ -59,7 +68,7 @@ async function registerAvailabilityCommand() {
 async function createWeeklyPoll() {
   try {
     if (!POLL_CONFIG.channelId) {
-      console.log('⚠️  CHANNEL_ID not configured. Skipping automatic weekly poll creation.');
+      console.log('⚠️ CHANNEL_ID not configured. Skipping automatic weekly poll creation.');
       console.log('Use the /availability command to create polls manually.');
       return;
     }
@@ -67,6 +76,12 @@ async function createWeeklyPoll() {
     const channel = client.channels.cache.get(POLL_CONFIG.channelId);
     if (!channel) {
       console.error('❌ Channel not found! Please check your CHANNEL_ID configuration.');
+      return;
+    }
+
+    const existingPollId = findActivePollIdByChannel(POLL_CONFIG.channelId);
+    if (existingPollId) {
+      console.log(`⚠️ An active poll already exists in this channel (id: ${existingPollId}). Skipping creation.`);
       return;
     }
 
@@ -185,23 +200,23 @@ client.on('interactionCreate', async (interaction) => {
 
 async function handlePollVote(interaction, pollId, optionIndex) {
   try {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate();
+    }
+
     const pollData = activePolls.get(pollId);
 
-    if (!pollData) {
-      await interaction.reply({
-        content: 'This poll is no longer active.',
-        ephemeral: true,
-      });
-      return;
-    }
+    if (!pollData) return;
 
-    if (Date.now() > pollData.endTime) {
-      await interaction.reply({
-        content: 'This poll has already ended.',
-        ephemeral: true,
-      });
+    if (Date.now() > pollData.endTime) return;
+
+    if (
+      typeof optionIndex !== 'number' ||
+      Number.isNaN(optionIndex) ||
+      optionIndex < 0 ||
+      optionIndex >= pollData.options.length
+    )
       return;
-    }
 
     const userId = interaction.user.id;
 
@@ -215,16 +230,8 @@ async function handlePollVote(interaction, pollId, optionIndex) {
 
       if (userVotes.has(optionIndex)) {
         userVotes.delete(optionIndex);
-        await interaction.reply({
-          content: `✅ Removed vote for: ${optionText}`,
-          ephemeral: true,
-        });
       } else {
         userVotes.add(optionIndex);
-        await interaction.reply({
-          content: `✅ Added vote for: ${optionText}`,
-          ephemeral: true,
-        });
       }
 
       if (userVotes.size === 0) {
@@ -235,27 +242,15 @@ async function handlePollVote(interaction, pollId, optionIndex) {
 
       if (previousVote === optionIndex) {
         pollData.votes.delete(userId);
-        await interaction.reply({
-          content: '✅ Your vote has been removed.',
-          ephemeral: true,
-        });
       } else {
         pollData.votes.set(userId, optionIndex);
         const optionText = pollData.options[optionIndex];
-        await interaction.reply({
-          content: `✅ You voted for: ${optionText}`,
-          ephemeral: true,
-        });
       }
     }
 
     await updatePollMessage(pollId);
   } catch (error) {
     console.error('Error handling poll vote:', error);
-    await interaction.reply({
-      content: 'An error occurred while processing your vote.',
-      ephemeral: true,
-    });
   }
 }
 
@@ -376,6 +371,16 @@ client.on('interactionCreate', async (interaction) => {
 
 async function createAvailabilityPoll(interaction) {
   try {
+    // Prevent duplicate active polls in the same channel
+    const existingPollId = findActivePollIdByChannel(interaction.channel.id);
+    if (existingPollId) {
+      await interaction.reply({
+        content: 'There is already an active poll in this channel. Please wait until it ends.',
+        ephemeral: true,
+      });
+      return;
+    }
+
     const pollId = Date.now().toString();
     const pollData = {
       question: POLL_CONFIG.defaultPollQuestion,
