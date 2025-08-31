@@ -17,12 +17,6 @@ const botToken = process.env.BOT_TOKEN;
 const activePolls = new Map();
 const POLLS_FILE = path.join(__dirname, 'active_polls.json');
 
-// Helper function to check if running in cron mode
-function isCronMode() {
-  const isRenderCronJob = process.env.RENDER === 'true' && process.env.IS_RENDER_CRON === 'true';
-  return process.env.CRON_MODE === 'true' || isRenderCronJob;
-}
-
 // Load existing polls from file
 function loadPolls() {
   try {
@@ -49,7 +43,7 @@ function loadPolls() {
           votes
         });
       }
-      console.log(`📁 Loaded ${activePolls.size} active polls from storage`);
+      console.log(`📁 Interaction Handler: Loaded ${activePolls.size} active polls from storage`);
     }
   } catch (error) {
     console.error('❌ Error loading polls from file:', error);
@@ -81,182 +75,46 @@ function savePolls() {
     }
     
     fs.writeFileSync(POLLS_FILE, JSON.stringify(pollsData, null, 2));
-    console.log(`💾 Saved ${activePolls.size} active polls to storage`);
+    console.log(`💾 Interaction Handler: Saved ${activePolls.size} active polls to storage`);
   } catch (error) {
     console.error('❌ Error saving polls to file:', error);
   }
 }
-const POLL_CONFIG = {
-  channelId: process.env.CHANNEL_ID,
-  pollDuration: 24 * 60 * 60 * 1000, // 24 hours
-  defaultPollQuestion: 'What days are you available this week?',
-  defaultPollOptions: [
-    '1️⃣ Monday',
-    '2️⃣ Tuesday',
-    '3️⃣ Wednesday',
-    '4️⃣ Thursday',
-    '5️⃣ Friday',
-    '6️⃣ Saturday',
-    '7️⃣ Sunday',
-    '❌ Unavailable',
-  ],
-  multipleChoice: true,
-};
 
-function findActivePollIdByChannel(channelId) {
-  for (const [existingPollId, pollData] of activePolls.entries()) {
-    if (pollData.channelId === channelId && Date.now() < pollData.endTime) {
-      return existingPollId;
-    }
-  }
-  return null;
-}
-
-// Clean up expired polls
-function cleanupExpiredPolls() {
+// Clean up expired polls and end them properly
+async function cleanupExpiredPolls() {
   const now = Date.now();
   let cleanedCount = 0;
   
   for (const [pollId, pollData] of activePolls.entries()) {
     if (now > pollData.endTime) {
-      activePolls.delete(pollId);
+      // End the poll properly before cleaning up
+      await endPoll(pollId);
       cleanedCount++;
     }
   }
   
   if (cleanedCount > 0) {
-    console.log(`🧹 Cleaned up ${cleanedCount} expired polls`);
-    savePolls();
+    console.log(`🧹 Interaction Handler: Ended and cleaned up ${cleanedCount} expired polls`);
   }
 }
 
-// Check if it's time for a new weekly poll (e.g., every Monday)
-function shouldCreateNewWeeklyPoll(channelId) {
-  const existingPollId = findActivePollIdByChannel(channelId);
-  if (existingPollId) {
-    console.log(`⚠️ An active poll already exists in channel ${channelId} (id: ${existingPollId}). Skipping creation.`);
-    return false;
-  }
+// More frequent check specifically for ending polls (every 5 minutes)
+async function checkAndEndExpiredPolls() {
+  const now = Date.now();
+  let endedCount = 0;
   
-  // Additional logic: Check if we've already created a poll this week
-  const now = new Date();
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay()); // Start of current week (Sunday)
-  startOfWeek.setHours(0, 0, 0, 0);
-  
-  // Check if any poll was created this week for this channel
   for (const [pollId, pollData] of activePolls.entries()) {
-    if (pollData.channelId === channelId) {
-      const pollCreatedTime = parseInt(pollId); // pollId is timestamp
-      if (pollCreatedTime >= startOfWeek.getTime()) {
-        console.log(`⚠️ A poll was already created this week for channel ${channelId}. Skipping creation.`);
-        return false;
-      }
+    // Check if poll has expired (with a small buffer to avoid timing issues)
+    if (now >= pollData.endTime - 30000) { // 30 seconds buffer
+      console.log(`⏰ Poll ${pollId} has expired. Ending now...`);
+      await endPoll(pollId);
+      endedCount++;
     }
   }
   
-  return true;
-}
-
-client.once('ready', async () => {
-  console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
-  
-  // Load existing polls from storage
-  loadPolls();
-  
-  // Clean up any expired polls
-  cleanupExpiredPolls();
-  
-  await registerAvailabilityCommand();
-  
-  // Check if running in cron mode
-  if (isCronMode()) {
-    console.log('🕐 Running in CRON mode - will create weekly poll if needed');
-    await createWeeklyPoll();
-    
-    // In cron mode, exit after creating poll
-    setTimeout(() => {
-      console.log('✅ Cron job completed. Exiting...');
-      savePolls();
-      process.exit(0);
-    }, 10000); // Give 10 seconds for poll creation to complete on Render
-  } else {
-    console.log('🔄 Running in persistent mode - bot will stay online');
-    await createWeeklyPoll();
-  }
-});
-
-async function registerAvailabilityCommand() {
-  const { REST, Routes } = require('discord.js');
-  const rest = new REST({ version: '10' }).setToken(botToken);
-
-  const commands = [
-    {
-      name: 'availability',
-      description: 'Create a weekly availability poll',
-    },
-  ];
-
-  try {
-    console.log('Registering availability command...');
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log('Availability command registered successfully!');
-  } catch (error) {
-    console.error('Error registering availability command:', error);
-  }
-}
-
-async function createWeeklyPoll() {
-  try {
-    if (!POLL_CONFIG.channelId) {
-      console.log('⚠️ CHANNEL_ID not configured. Skipping automatic weekly poll creation.');
-      console.log('Use the /availability command to create polls manually.');
-      return;
-    }
-
-    const channel = client.channels.cache.get(POLL_CONFIG.channelId);
-    if (!channel) {
-      console.error('❌ Channel not found! Please check your CHANNEL_ID configuration.');
-      return;
-    }
-
-    // Use the improved checking logic
-    if (!shouldCreateNewWeeklyPoll(POLL_CONFIG.channelId)) {
-      return;
-    }
-
-    const pollId = Date.now().toString();
-    const pollData = {
-      question: POLL_CONFIG.defaultPollQuestion,
-      options: POLL_CONFIG.defaultPollOptions,
-      votes: new Map(),
-      endTime: Date.now() + POLL_CONFIG.pollDuration,
-      channelId: POLL_CONFIG.channelId,
-      multipleChoice: POLL_CONFIG.multipleChoice,
-    };
-
-    const embed = createPollEmbed(pollData, pollId);
-    const buttons = createPollButtons(pollData.options, pollId);
-    const pollMessage = await channel.send({
-      content: '**Weekly Poll is Live!**',
-      embeds: [embed],
-      components: buttons,
-    });
-
-    activePolls.set(pollId, {
-      ...pollData,
-      messageId: pollMessage.id,
-    });
-
-    // Save to persistent storage
-    savePolls();
-
-    // Don't set setTimeout in cron mode - polls will be managed by separate processes
-    if (!isCronMode()) {
-      setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
-    }
-  } catch (error) {
-    console.error('❌ Error creating weekly poll:', error);
+  if (endedCount > 0) {
+    console.log(`⏰ Ended ${endedCount} expired polls`);
   }
 }
 
@@ -342,17 +200,27 @@ async function handlePollVote(interaction, pollId, optionIndex) {
 
     const pollData = activePolls.get(pollId);
 
-    if (!pollData) return;
+    if (!pollData) {
+      console.log(`❌ Poll ${pollId} not found`);
+      return;
+    }
 
-    if (Date.now() > pollData.endTime) return;
+    if (Date.now() > pollData.endTime) {
+      console.log(`❌ Poll ${pollId} has expired`);
+      // End the poll if it hasn't been ended yet
+      await endPoll(pollId);
+      return;
+    }
 
     if (
       typeof optionIndex !== 'number' ||
       Number.isNaN(optionIndex) ||
       optionIndex < 0 ||
       optionIndex >= pollData.options.length
-    )
+    ) {
+      console.log(`❌ Invalid option index: ${optionIndex}`);
       return;
+    }
 
     const userId = interaction.user.id;
 
@@ -366,8 +234,10 @@ async function handlePollVote(interaction, pollId, optionIndex) {
 
       if (userVotes.has(optionIndex)) {
         userVotes.delete(optionIndex);
+        console.log(`🗳️ User ${userId} removed vote for: ${optionText}`);
       } else {
         userVotes.add(optionIndex);
+        console.log(`🗳️ User ${userId} voted for: ${optionText}`);
       }
 
       if (userVotes.size === 0) {
@@ -378,9 +248,11 @@ async function handlePollVote(interaction, pollId, optionIndex) {
 
       if (previousVote === optionIndex) {
         pollData.votes.delete(userId);
+        console.log(`🗳️ User ${userId} removed their vote`);
       } else {
         pollData.votes.set(userId, optionIndex);
         const optionText = pollData.options[optionIndex];
+        console.log(`🗳️ User ${userId} voted for: ${optionText}`);
       }
     }
 
@@ -416,6 +288,26 @@ async function updatePollMessage(pollId) {
   }
 }
 
+client.once('ready', async () => {
+  console.log(`✅ Interaction Handler Bot is ready! Logged in as ${client.user.tag}`);
+  
+  // Load existing polls from storage
+  loadPolls();
+  
+  // Clean up any expired polls
+  await cleanupExpiredPolls();
+  
+  // Set up periodic cleanup (every 30 minutes)
+  setInterval(async () => {
+    await cleanupExpiredPolls();
+  }, 30 * 60 * 1000);
+  
+  // Set up more frequent poll ending checks (every 5 minutes)
+  setInterval(async () => {
+    await checkAndEndExpiredPolls();
+  }, 5 * 60 * 1000);
+});
+
 async function endPoll(pollId) {
   try {
     const pollData = activePolls.get(pollId);
@@ -446,6 +338,7 @@ async function endPoll(pollId) {
     }
 
     activePolls.delete(pollId);
+    savePolls();
 
     console.log(`Poll ${pollId} has ended`);
   } catch (error) {
@@ -510,70 +403,7 @@ client.on('interactionCreate', async (interaction) => {
     }
     return;
   }
-
-  // Handle slash command interactions
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'availability') {
-      await createAvailabilityPoll(interaction);
-    }
-    return;
-  }
 });
-
-async function createAvailabilityPoll(interaction) {
-  try {
-    // Prevent duplicate active polls in the same channel
-    const existingPollId = findActivePollIdByChannel(interaction.channel.id);
-    if (existingPollId) {
-      await interaction.reply({
-        content: 'There is already an active poll in this channel. Please wait until it ends.',
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const pollId = Date.now().toString();
-    const pollData = {
-      question: POLL_CONFIG.defaultPollQuestion,
-      options: POLL_CONFIG.defaultPollOptions,
-      votes: new Map(),
-      endTime: Date.now() + POLL_CONFIG.pollDuration,
-      channelId: interaction.channel.id,
-      multipleChoice: POLL_CONFIG.multipleChoice,
-    };
-
-    const embed = createPollEmbed(pollData, pollId);
-    const buttons = createPollButtons(pollData.options, pollId);
-
-    const pollMessage = await interaction.reply({
-      content: '**Weekly Availability Poll Created!**',
-      embeds: [embed],
-      components: buttons,
-      fetchReply: true,
-    });
-
-    activePolls.set(pollId, {
-      ...pollData,
-      messageId: pollMessage.id,
-    });
-
-    // Save to persistent storage
-    savePolls();
-
-    // Don't set setTimeout in cron mode - polls will be managed by separate processes
-    if (!isCronMode()) {
-      setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
-    }
-
-    console.log(`Manual availability poll created with ID: ${pollId}`);
-  } catch (error) {
-    console.error('Error creating availability poll:', error);
-    await interaction.reply({
-      content: 'An error occurred while creating the poll.',
-      ephemeral: true,
-    });
-  }
-}
 
 client.on('error', console.error);
 

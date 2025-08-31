@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node main.js",
     "dev": "nodemon main.js",
-    "install-deps": "npm install"
+    "cron": "node main.js",
+    "interaction-handler": "node interaction-handler.js",
+    "install-deps": "npm install",
+    "build": "echo 'Build completed'"
   },
   "author": "Tim Moss",
   "license": "MIT",

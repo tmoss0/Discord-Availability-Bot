@@ -1,0 +1,31 @@
+services:
+  # Background Worker for handling interactions (always running)
+  - type: worker
+    name: discord-bot-interaction-handler
+    env: node
+    buildCommand: npm install
+    startCommand: npm run interaction-handler
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BOT_TOKEN
+        sync: false  # Set this in Render dashboard
+      - key: CHANNEL_ID
+        sync: false  # Set this in Render dashboard
+
+  # Cron Job for creating weekly polls
+  - type: cron
+    name: discord-bot-weekly-poll
+    env: node
+    buildCommand: npm install
+    schedule: "0 9 * * 1"  # Every Monday at 9 AM UTC
+    startCommand: npm run cron
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BOT_TOKEN
+        sync: false  # Set this in Render dashboard
+      - key: CHANNEL_ID
+        sync: false  # Set this in Render dashboard
+      - key: IS_RENDER_CRON
+        value: "true"
