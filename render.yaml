@@ -18,7 +18,7 @@ services:
     name: discord-bot-weekly-poll
     env: node
     buildCommand: npm install
-    schedule: "0 9 * * 1"  # Every Monday at 9 AM UTC
+    schedule: "0 23 * * 0"
     startCommand: npm run cron
     envVars:
       - key: NODE_ENV
