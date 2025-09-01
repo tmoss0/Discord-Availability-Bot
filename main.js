@@ -251,10 +251,8 @@ async function createWeeklyPoll() {
     // Save to persistent storage
     savePolls();
 
-    // Don't set setTimeout in cron mode - polls will be managed by separate processes
-    if (!isCronMode()) {
-      setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
-    }
+    // Always set the timeout to automatically close the poll after 24 hours
+    setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
   } catch (error) {
     console.error('❌ Error creating weekly poll:', error);
   }
@@ -560,10 +558,8 @@ async function createAvailabilityPoll(interaction) {
     // Save to persistent storage
     savePolls();
 
-    // Don't set setTimeout in cron mode - polls will be managed by separate processes
-    if (!isCronMode()) {
-      setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
-    }
+    // Always set the timeout to automatically close the poll after 24 hours
+    setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`Manual availability poll created with ID: ${pollId}`);
   } catch (error) {
