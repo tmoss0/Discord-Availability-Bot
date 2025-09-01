@@ -35,16 +35,24 @@ function isCronMode() {
   return process.env.IS_RENDER_CRON === 'true';
 }
 
+// Helper function to get and validate poll data
+function getPollData(pollId) {
+  const pollData = activePolls.get(pollId);
+  if (!pollData) return null;
+  if (Date.now() > pollData.endTime) return null;
+  return pollData;
+}
+
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
-  
+
   await registerAvailabilityCommand();
-  
+
   // Check if running in cron mode
   if (isCronMode()) {
     console.log('🕐 Running in CRON mode - will create weekly poll');
     await createWeeklyPoll();
-    
+
     // In cron mode, exit after creating poll
     setTimeout(() => {
       console.log('✅ Cron job completed. Exiting...');
@@ -113,7 +121,7 @@ async function createWeeklyPoll() {
 
     // Set timeout to automatically close the poll after 24 hours
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
-    
+
     console.log(`Weekly poll created with ID: ${pollId}`);
   } catch (error) {
     console.error('❌ Error creating weekly poll:', error);
@@ -200,9 +208,8 @@ async function handlePollVote(interaction, pollId, optionIndex) {
       await interaction.deferUpdate();
     }
 
-    const pollData = activePolls.get(pollId);
+    const pollData = getPollData(pollId);
     if (!pollData) return;
-    if (Date.now() > pollData.endTime) return;
 
     if (
       typeof optionIndex !== 'number' ||
@@ -246,7 +253,7 @@ async function handlePollVote(interaction, pollId, optionIndex) {
 
 async function updatePollMessage(pollId) {
   try {
-    const pollData = activePolls.get(pollId);
+    const pollData = getPollData(pollId);
     if (!pollData) return;
 
     const channel = client.channels.cache.get(pollData.channelId);
@@ -269,7 +276,7 @@ async function updatePollMessage(pollId) {
 
 async function endPoll(pollId) {
   try {
-    const pollData = activePolls.get(pollId);
+    const pollData = getPollData(pollId);
     if (!pollData) return;
 
     const channel = client.channels.cache.get(pollData.channelId);
