@@ -46,18 +46,23 @@ function getPollData(pollId) {
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
 
-  await registerAvailabilityCommand();
+  // Skip slash command registration in CRON mode to speed up startup
+  if (!isCronMode()) {
+    await registerAvailabilityCommand();
+  }
 
   // Check if running in cron mode
   if (isCronMode()) {
-    console.log('🕐 Running in CRON mode - will create weekly poll');
-    await createWeeklyPoll();
+    console.log('🕐 Running in CRON mode - creating weekly poll and staying online for votes');
+    const pollId = await createWeeklyPoll();
 
-    // In cron mode, exit after creating poll
+    // Stay online for the duration of the poll, then exit
+    const bufferMs = 15000; // small buffer to allow result message edits to complete
+    console.log(`⏳ Staying online for ${(POLL_CONFIG.pollDuration / (60 * 1000)).toFixed(0)} minutes to collect votes...`);
     setTimeout(() => {
-      console.log('✅ Cron job completed. Exiting...');
+      console.log('✅ Poll window complete. Exiting...');
       process.exit(0);
-    }, 10000);
+    }, POLL_CONFIG.pollDuration + bufferMs);
   } else {
     console.log('🔄 Running in persistent mode - bot will stay online');
   }
@@ -87,13 +92,13 @@ async function createWeeklyPoll() {
   try {
     if (!POLL_CONFIG.channelId) {
       console.log('⚠️ CHANNEL_ID not configured. Skipping automatic weekly poll creation.');
-      return;
+      return null;
     }
 
     const channel = client.channels.cache.get(POLL_CONFIG.channelId);
     if (!channel) {
       console.error('❌ Channel not found! Please check your CHANNEL_ID configuration.');
-      return;
+      return null;
     }
 
     const pollId = Date.now().toString();
@@ -123,8 +128,10 @@ async function createWeeklyPoll() {
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`Weekly poll created with ID: ${pollId}`);
+    return pollId;
   } catch (error) {
     console.error('❌ Error creating weekly poll:', error);
+    return null;
   }
 }
 
