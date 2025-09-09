@@ -46,19 +46,19 @@ function getPollData(pollId) {
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
 
-  // Skip slash command registration in CRON mode to speed up startup
   if (!isCronMode()) {
     await registerAvailabilityCommand();
   }
 
-  // Check if running in cron mode
   if (isCronMode()) {
     console.log('🕐 Running in CRON mode - creating weekly poll and staying online for votes');
     const pollId = await createWeeklyPoll();
 
     // Stay online for the duration of the poll, then exit
     const bufferMs = 15000; // small buffer to allow result message edits to complete
-    console.log(`⏳ Staying online for ${(POLL_CONFIG.pollDuration / (60 * 1000)).toFixed(0)} minutes to collect votes...`);
+    console.log(
+      `⏳ Staying online for ${(POLL_CONFIG.pollDuration / (60 * 1000)).toFixed(0)} minutes to collect votes...`
+    );
     setTimeout(() => {
       console.log('✅ Poll window complete. Exiting...');
       process.exit(0);
@@ -124,7 +124,6 @@ async function createWeeklyPoll() {
       messageId: pollMessage.id,
     });
 
-    // Set timeout to automatically close the poll after 24 hours
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`Weekly poll created with ID: ${pollId}`);
@@ -410,7 +409,6 @@ async function createAvailabilityPoll(interaction) {
       messageId: pollMessage.id,
     });
 
-    // Set timeout to automatically close the poll after 24 hours
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`Manual availability poll created with ID: ${pollId}`);
