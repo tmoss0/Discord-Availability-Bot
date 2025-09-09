@@ -30,12 +30,10 @@ const POLL_CONFIG = {
   multipleChoice: true,
 };
 
-// Helper function to check if running in cron mode
 function isCronMode() {
   return process.env.IS_RENDER_CRON === 'true';
 }
 
-// Helper function to get and validate poll data
 function getPollData(pollId) {
   const pollData = activePolls.get(pollId);
   if (!pollData) return null;
