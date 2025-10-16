@@ -142,22 +142,21 @@ client.once('ready', async () => {
 });
 
 async function registerAvailabilityCommand() {
-  const { REST, Routes } = require('discord.js');
+  const { REST, Routes, SlashCommandBuilder } = require('discord.js');
   const rest = new REST({ version: '10' }).setToken(botToken);
 
   const commands = [
-    {
-      name: 'availability',
-      description: 'Create a weekly availability poll',
-    },
-  ];
+    new SlashCommandBuilder()
+      .setName('availability')
+      .setDescription('Create a weekly availability poll')
+  ].map(command => command.toJSON());
 
   try {
-    console.log('Registering availability command...');
+    console.log('Registering slash commands...');
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log('Availability command registered successfully!');
+    console.log('Slash commands registered successfully!');
   } catch (error) {
-    console.error('Error registering availability command:', error);
+    console.error('Error registering slash commands:', error);
   }
 }
 
@@ -497,6 +496,7 @@ async function createAvailabilityPoll(interaction) {
     });
   }
 }
+
 
 client.on('error', console.error);
 
