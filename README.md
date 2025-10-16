@@ -1,152 +1,78 @@
 # Discord Availability Bot
 
-A simple Discord bot that creates weekly availability polls automatically via cron jobs, with manual poll creation capability.
+A Discord bot for creating weekly availability polls with persistent storage and Railway.com deployment support.
 
 ## Features
 
-- **Cron Job Compatible**: Designed to run as scheduled tasks on Render.com
-- **Simple Architecture**: Single file handles everything - no complex setup needed
-- **Automatic Poll Management**: Polls automatically close after 24 hours and show results
+- **Persistent Storage**: Polls and votes survive container restarts
+- **Railway.com Compatible**: Optimized for continuous deployment
+- **Automatic Poll Management**: Polls automatically close after 24 hours
 - **Multiple Choice Voting**: Users can select multiple available days
 - **Real-time Updates**: Vote counts update in real-time
-- **Manual Poll Creation**: Use `/availability` command to create polls anytime
+- **Manual Poll Creation**: Use `/availability` slash command anytime
 - **Clean Results**: Shows final results and removes voting buttons when polls end
 
-## How It Works
+## Environment Variables Required
 
-1. **Cron Job**: Bot starts, creates a weekly poll, then exits (perfect for Render.com)
-2. **Voting**: Users click buttons to vote for available days
-3. **Auto-Close**: After 24 hours, poll automatically closes and shows results
-4. **Manual Command**: Users can create polls anytime with `/availability`
+Set these environment variables in your Railway.com project:
 
-## Setup Instructions
+### Required
 
-### 1. Install Dependencies
-```bash
-npm install
-```
+- `BOT_TOKEN`: Your Discord bot token from the Discord Developer Portal
 
-### 2. Environment Configuration
-Create a `.env` file with:
-```env
-BOT_TOKEN=your_bot_token_here
-CHANNEL_ID=your_channel_id_here
-```
+### Optional
 
-### 3. Discord Bot Setup
+- `CHANNEL_ID`: Discord channel ID where automatic polls will be posted
+- `AUTO_POLL_MODE`: Set to `"true"` to enable automatic weekly poll creation
 
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application
-3. Go to "Bot" section and create a bot
-4. Copy the bot token and add it to your environment variables
-5. Enable these bot permissions:
-   - Send Messages
-   - Use Slash Commands
-   - Add Reactions
-   - Embed Links
-6. Invite the bot to your server with appropriate permissions
+## Deployment Steps
 
-### 4. Deploy to Render.com
+1. **Connect your GitHub repository** to Railway.com
+2. **Set environment variables** in Railway dashboard
+3. **Deploy** - Railway will automatically detect your Node.js app
 
-1. **Fork/Clone** this repository to your GitHub account
-2. **Connect to Render**: 
-   - Go to [Render.com](https://render.com)
-   - Click "New" → "Cron Job"
-   - Connect your GitHub repository
-3. **Configure the Cron Job**:
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm run cron`
-   - **Schedule**: `0 23 * * 0` (Sunday 11 PM UTC - adjust for your timezone)
-4. **Set Environment Variables**:
-   - `BOT_TOKEN`: Your Discord bot token
-   - `CHANNEL_ID`: Your Discord channel ID
-   - `IS_RENDER_CRON`: `true`
-5. **Deploy**: Render will create a cron job that runs weekly
+## How Polls Work on Railway.com
 
-## Usage
+### Fixed Issues
 
-### Running Modes
+- **Persistent Storage**: Polls and votes are now saved to `polls.json` file
+- **Container Restarts**: Polls survive container restarts and deployments
+- **Continuous Operation**: Bot stays running without `process.exit()`
+- **Auto-Recovery**: Active polls are restored when the bot restarts
 
-1. **Cron Mode** (for scheduled poll creation):
-   ```bash
-   IS_RENDER_CRON=true npm run cron
-   ```
-   - Creates weekly poll
-   - Exits after completion
-   - Use this in your Render.com cron job
+### Poll Behavior
 
-2. **Manual Mode** (for testing or always-on usage):
-   ```bash
-   npm start
-   ```
-   - Bot stays online to handle commands and voting
-   - Good for development and testing
+- **Manual Polls**: Use `/availability` slash command anytime
+- **Automatic Polls**: Set `AUTO_POLL_MODE=true` and `CHANNEL_ID` for weekly polls
+- **Duration**: Polls run for 24 hours by default
+- **Voting**: Multiple choice enabled - users can select multiple days
+- **Results**: Automatic results posted when poll ends
 
-### Poll Lifecycle
+### File Storage
 
-1. **Poll Creation**: Cron job creates poll with 24-hour duration
-2. **Voting Period**: Users vote via button interactions
-3. **Auto-Close**: Poll automatically ends after 24 hours
-   - Posts final results to Discord
-   - Updates original poll message to show "ENDED" status
-   - Removes voting buttons
-4. **Results**: Shows vote counts, percentages, and who voted for what
+- Poll data is stored in `polls.json` in your project directory
+- Data persists across deployments and restarts
+- Expired polls are automatically cleaned up
 
-## Environment Variables
+## Testing Your Deployment
 
-- `BOT_TOKEN` (required): Your Discord bot token
-- `CHANNEL_ID` (required): Discord channel ID for automatic weekly polls
-- `IS_RENDER_CRON` (optional): Set to `"true"` for cron job mode
+1. Deploy to Railway.com
+2. Invite bot to your Discord server with proper permissions
+3. Test manual poll: `/availability`
+4. Check that votes are saved and poll updates correctly
+5. Wait for poll to end and verify results are posted
 
-## Render.com Setup
+## Monitoring
 
-### Cron Job Configuration:
-- **Service Type**: Cron Job
-- **Build Command**: `npm install`
-- **Start Command**: `npm run cron`
-- **Schedule**: `0 23 * * 0` (Sunday 11 PM UTC)
-- **Environment Variables**:
-  - `BOT_TOKEN`: Your Discord bot token
-  - `CHANNEL_ID`: Your Discord channel ID
-  - `IS_RENDER_CRON`: `true`
+Check Railway.com logs to see:
 
-### Timezone Note:
-The cron schedule `0 23 * * 0` runs at 11:00 PM UTC every Sunday. Adjust this for your local timezone:
-- **Eastern Time (UTC-5)**: Use `0 4 * * 1` for Monday 12:00 AM UTC (Sunday 7:00 PM ET)
-- **Pacific Time (UTC-8)**: Use `0 7 * * 1` for Monday 7:00 AM UTC (Sunday 11:00 PM PT)
+- Bot startup messages
+- Poll creation and vote handling
+- Any error messages
 
 ## Troubleshooting
 
-### Common Issues:
-
-1. **Polls not closing**: Make sure the bot has proper permissions and can edit messages
-2. **Votes not working**: Check that the bot is running and has the right intents
-3. **Cron job not running**: Verify the schedule in Render.com and check logs
-
-### Testing:
-
-1. **Test Cron Job Locally**:
-   ```bash
-   IS_RENDER_CRON=true npm run cron
-   ```
-
-2. **Test Manual Mode**:
-   ```bash
-   npm start
-   ```
-
-3. **Test Command**:
-   - Use `/availability` in Discord to create a test poll
-
-## Files
-
-- `main.js` - Main bot code (handles everything)
-- `package.json` - Dependencies and scripts
-- `.env` - Environment variables (create this)
-- `README.md` - This file
-
-## Scripts
-
-- `npm start` - Run bot in manual mode (stays online)
-- `npm run cron` - Run bot in cron mode (creates poll and exits)
-- `npm run dev` - Run with nodemon for development
+- **Bot not responding**: Check if environment variable `BOT_TOKEN` is set correctly
+- **Polls not creating**: Check if environment variable `CHANNEL_ID` is set and bot has permissions
+- **Cron job not running**: Check if environment variable `AUTO_POLL_MODE` is set correctly
+- **Votes not saving**: Check file permissions in Railway container

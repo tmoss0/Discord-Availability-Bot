@@ -33,7 +33,7 @@ const POLL_CONFIG = {
 };
 
 function isCronMode() {
-  return process.env.IS_RENDER_CRON === 'true';
+  return process.env.AUTO_POLL_MODE === 'true';
 }
 
 // Poll persistence functions
@@ -125,7 +125,7 @@ client.once('ready', async () => {
 
   if (isCronMode()) {
     console.log('🕐 Running in CRON mode - creating weekly poll and staying online for votes');
-    const pollId = await createWeeklyPoll();
+    await createWeeklyPoll();
 
     // Stay online for the duration of the poll (Railway.com compatible)
     const bufferMs = 15000; // small buffer to allow result message edits to complete
@@ -200,7 +200,7 @@ async function createWeeklyPoll() {
     savePolls(); // Save to persistent storage
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
-    console.log(`Weekly poll created with ID: ${pollId}`);
+    console.log(`✅ Weekly poll created with ID: ${pollId}`);
     return pollId;
   } catch (error) {
     console.error('❌ Error creating weekly poll:', error);
