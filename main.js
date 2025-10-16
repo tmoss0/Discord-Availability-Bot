@@ -1,4 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
@@ -11,6 +13,7 @@ if (!process.env.BOT_TOKEN) {
 
 const botToken = process.env.BOT_TOKEN;
 const activePolls = new Map();
+const POLLS_FILE = path.join(__dirname, 'polls.json');
 
 const POLL_CONFIG = {
   channelId: process.env.CHANNEL_ID,
@@ -33,6 +36,73 @@ function isCronMode() {
   return process.env.IS_RENDER_CRON === 'true';
 }
 
+// Poll persistence functions
+function savePolls() {
+  try {
+    const pollsData = {};
+    for (const [pollId, pollData] of activePolls.entries()) {
+      // Convert Map and Set objects to plain objects for JSON serialization
+      const serializedVotes = {};
+      for (const [userId, userVotes] of pollData.votes.entries()) {
+        if (pollData.multipleChoice) {
+          serializedVotes[userId] = Array.from(userVotes);
+        } else {
+          serializedVotes[userId] = userVotes;
+        }
+      }
+      
+      pollsData[pollId] = {
+        ...pollData,
+        votes: serializedVotes
+      };
+    }
+    fs.writeFileSync(POLLS_FILE, JSON.stringify(pollsData, null, 2));
+  } catch (error) {
+    console.error('Error saving polls:', error);
+  }
+}
+
+function loadPolls() {
+  try {
+    if (fs.existsSync(POLLS_FILE)) {
+      const data = fs.readFileSync(POLLS_FILE, 'utf8');
+      const pollsData = JSON.parse(data);
+      
+      for (const [pollId, pollData] of Object.entries(pollsData)) {
+        // Skip expired polls
+        if (Date.now() > pollData.endTime) {
+          continue;
+        }
+        
+        // Reconstruct Map and Set objects
+        const votes = new Map();
+        for (const [userId, userVotes] of Object.entries(pollData.votes)) {
+          if (pollData.multipleChoice) {
+            votes.set(userId, new Set(userVotes));
+          } else {
+            votes.set(userId, userVotes);
+          }
+        }
+        
+        activePolls.set(pollId, {
+          ...pollData,
+          votes
+        });
+        
+        // Set up timeout for remaining duration
+        const remainingTime = pollData.endTime - Date.now();
+        if (remainingTime > 0) {
+          setTimeout(() => endPoll(pollId), remainingTime);
+        }
+      }
+      
+      console.log(`Loaded ${activePolls.size} active polls from storage`);
+    }
+  } catch (error) {
+    console.error('Error loading polls:', error);
+  }
+}
+
 function getPollData(pollId) {
   const pollData = activePolls.get(pollId);
   if (!pollData) return null;
@@ -43,6 +113,12 @@ function getPollData(pollId) {
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
 
+  // Load any existing polls from storage
+  loadPolls();
+
+  // Set up periodic saves every 5 minutes
+  setInterval(savePolls, 5 * 60 * 1000);
+
   if (!isCronMode()) {
     await registerAvailabilityCommand();
   }
@@ -51,14 +127,14 @@ client.once('ready', async () => {
     console.log('🕐 Running in CRON mode - creating weekly poll and staying online for votes');
     const pollId = await createWeeklyPoll();
 
-    // Stay online for the duration of the poll, then exit
+    // Stay online for the duration of the poll (Railway.com compatible)
     const bufferMs = 15000; // small buffer to allow result message edits to complete
     console.log(
       `⏳ Staying online for ${(POLL_CONFIG.pollDuration / (60 * 1000)).toFixed(0)} minutes to collect votes...`
     );
+    // Note: Removed process.exit() to keep bot running on Railway.com
     setTimeout(() => {
-      console.log('✅ Poll window complete. Exiting...');
-      process.exit(0);
+      console.log('✅ Poll window complete. Bot will continue running...');
     }, POLL_CONFIG.pollDuration + bufferMs);
   } else {
     console.log('🔄 Running in persistent mode - bot will stay online');
@@ -121,6 +197,7 @@ async function createWeeklyPoll() {
       messageId: pollMessage.id,
     });
 
+    savePolls(); // Save to persistent storage
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`Weekly poll created with ID: ${pollId}`);
@@ -138,7 +215,7 @@ function createPollEmbed(pollData) {
     .setColor('#0099ff')
     .setTimestamp()
     .setFooter({
-      text: `${pollData.multipleChoice ? '• Multiple choices allowed' : '• Single choice only'}`,
+      text: `${pollData.multipleChoice ? 'Multiple choices allowed' : 'Single choice only'}`,
     });
 
   pollData.options.forEach((option, index) => {
@@ -249,6 +326,7 @@ async function handlePollVote(interaction, pollId, optionIndex) {
     }
 
     await updatePollMessage(pollId);
+    savePolls(); // Save votes to persistent storage
   } catch (error) {
     console.error('Error handling poll vote:', error);
   }
@@ -307,6 +385,7 @@ async function endPoll(pollId) {
     }
 
     activePolls.delete(pollId);
+    savePolls(); // Remove ended poll from storage
     console.log(`Poll ${pollId} has ended`);
   } catch (error) {
     console.error('Error ending poll:', error);
@@ -406,6 +485,7 @@ async function createAvailabilityPoll(interaction) {
       messageId: pollMessage.id,
     });
 
+    savePolls(); // Save to persistent storage
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`Manual availability poll created with ID: ${pollId}`);
