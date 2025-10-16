@@ -19,11 +19,11 @@ Set these environment variables in your Railway.com project:
 ### Required
 
 - `BOT_TOKEN`: Your Discord bot token from the Discord Developer Portal
-
+- `CHANNEL_ID`: Discord channel ID where automatic polls will be posted
+  
 ### Optional
 
-- `CHANNEL_ID`: Discord channel ID where automatic polls will be posted
-- `AUTO_POLL_MODE`: Set to `"true"` to enable automatic weekly poll creation
+- `AUTO_POLL_MODE`: Set to `"true"` to enable automatic weekly poll creation, otherwise polls will not be created on CRON job execution
 
 ## Deployment Steps
 
