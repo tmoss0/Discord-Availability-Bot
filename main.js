@@ -50,10 +50,10 @@ function savePolls() {
           serializedVotes[userId] = userVotes;
         }
       }
-      
+
       pollsData[pollId] = {
         ...pollData,
-        votes: serializedVotes
+        votes: serializedVotes,
       };
     }
     fs.writeFileSync(POLLS_FILE, JSON.stringify(pollsData, null, 2));
@@ -67,13 +67,13 @@ function loadPolls() {
     if (fs.existsSync(POLLS_FILE)) {
       const data = fs.readFileSync(POLLS_FILE, 'utf8');
       const pollsData = JSON.parse(data);
-      
+
       for (const [pollId, pollData] of Object.entries(pollsData)) {
         // Skip expired polls
         if (Date.now() > pollData.endTime) {
           continue;
         }
-        
+
         // Reconstruct Map and Set objects
         const votes = new Map();
         for (const [userId, userVotes] of Object.entries(pollData.votes)) {
@@ -83,19 +83,19 @@ function loadPolls() {
             votes.set(userId, userVotes);
           }
         }
-        
+
         activePolls.set(pollId, {
           ...pollData,
-          votes
+          votes,
         });
-        
+
         // Set up timeout for remaining duration
         const remainingTime = pollData.endTime - Date.now();
         if (remainingTime > 0) {
           setTimeout(() => endPoll(pollId), remainingTime);
         }
       }
-      
+
       console.log(`Loaded ${activePolls.size} active polls from storage`);
     }
   } catch (error) {
@@ -119,9 +119,8 @@ client.once('ready', async () => {
   // Set up periodic saves every 5 minutes
   setInterval(savePolls, 5 * 60 * 1000);
 
-  if (!isCronMode()) {
-    await registerAvailabilityCommand();
-  }
+  // Always register commands so they appear in bot profile
+  await registerAvailabilityCommand();
 
   if (isCronMode()) {
     console.log('🕐 Running in CRON mode - creating weekly poll and staying online for votes');
@@ -148,15 +147,16 @@ async function registerAvailabilityCommand() {
   const commands = [
     new SlashCommandBuilder()
       .setName('availability')
-      .setDescription('Create a weekly availability poll')
-  ].map(command => command.toJSON());
+      .setDescription('Create a weekly availability poll for your server'),
+  ].map((command) => command.toJSON());
 
   try {
-    console.log('Registering slash commands...');
+    console.log('🔄 Registering slash commands globally...');
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log('Slash commands registered successfully!');
+    console.log('✅ Slash commands registered successfully!');
+    console.log('💡 The /availability command will now appear as a button in the bot profile');
   } catch (error) {
-    console.error('Error registering slash commands:', error);
+    console.error('❌ Error registering slash commands:', error);
   }
 }
 
@@ -497,7 +497,5 @@ async function createAvailabilityPoll(interaction) {
   }
 }
 
-
 client.on('error', console.error);
-
 client.login(botToken);
