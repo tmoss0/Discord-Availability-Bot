@@ -36,7 +36,6 @@ function isCronMode() {
   return process.env.AUTO_POLL_MODE === 'true';
 }
 
-// Poll persistence functions
 function savePolls() {
   try {
     const pollsData = {};
@@ -50,10 +49,10 @@ function savePolls() {
           serializedVotes[userId] = userVotes;
         }
       }
-      
+
       pollsData[pollId] = {
         ...pollData,
-        votes: serializedVotes
+        votes: serializedVotes,
       };
     }
     fs.writeFileSync(POLLS_FILE, JSON.stringify(pollsData, null, 2));
@@ -67,13 +66,13 @@ function loadPolls() {
     if (fs.existsSync(POLLS_FILE)) {
       const data = fs.readFileSync(POLLS_FILE, 'utf8');
       const pollsData = JSON.parse(data);
-      
+
       for (const [pollId, pollData] of Object.entries(pollsData)) {
         // Skip expired polls
         if (Date.now() > pollData.endTime) {
           continue;
         }
-        
+
         // Reconstruct Map and Set objects
         const votes = new Map();
         for (const [userId, userVotes] of Object.entries(pollData.votes)) {
@@ -83,19 +82,19 @@ function loadPolls() {
             votes.set(userId, userVotes);
           }
         }
-        
+
         activePolls.set(pollId, {
           ...pollData,
-          votes
+          votes,
         });
-        
+
         // Set up timeout for remaining duration
         const remainingTime = pollData.endTime - Date.now();
         if (remainingTime > 0) {
           setTimeout(() => endPoll(pollId), remainingTime);
         }
       }
-      
+
       console.log(`Loaded ${activePolls.size} active polls from storage`);
     }
   } catch (error) {
@@ -127,15 +126,10 @@ client.once('ready', async () => {
     console.log('🕐 Running in CRON mode - creating weekly poll and staying online for votes');
     await createWeeklyPoll();
 
-    // Stay online for the duration of the poll (Railway.com compatible)
-    const bufferMs = 15000; // small buffer to allow result message edits to complete
     console.log(
       `⏳ Staying online for ${(POLL_CONFIG.pollDuration / (60 * 1000)).toFixed(0)} minutes to collect votes...`
     );
-    // Note: Removed process.exit() to keep bot running on Railway.com
-    setTimeout(() => {
-      console.log('✅ Poll window complete. Bot will continue running...');
-    }, POLL_CONFIG.pollDuration + bufferMs);
+    console.log('🔄 Bot will automatically shut down after poll ends and results are displayed');
   } else {
     console.log('🔄 Running in persistent mode - bot will stay online');
   }
@@ -163,12 +157,13 @@ async function registerAvailabilityCommand() {
 
 async function createWeeklyPoll() {
   try {
-    if (!POLL_CONFIG.channelId) {
+    const channelId = POLL_CONFIG.channelId;
+    if (!channelId) {
       console.log('⚠️ CHANNEL_ID not configured. Skipping automatic weekly poll creation.');
       return null;
     }
 
-    const channel = client.channels.cache.get(POLL_CONFIG.channelId);
+    const channel = client.channels.cache.get(channelId);
     if (!channel) {
       console.error('❌ Channel not found! Please check your CHANNEL_ID configuration.');
       return null;
@@ -180,11 +175,11 @@ async function createWeeklyPoll() {
       options: POLL_CONFIG.defaultPollOptions,
       votes: new Map(),
       endTime: Date.now() + POLL_CONFIG.pollDuration,
-      channelId: POLL_CONFIG.channelId,
+      channelId: channelId,
       multipleChoice: POLL_CONFIG.multipleChoice,
     };
 
-    const embed = createPollEmbed(pollData, pollId);
+    const embed = createPollEmbed(pollData);
     const buttons = createPollButtons(pollData.options, pollId);
     const pollMessage = await channel.send({
       content: '**Weekly Poll is Live!**',
@@ -197,7 +192,7 @@ async function createWeeklyPoll() {
       messageId: pollMessage.id,
     });
 
-    savePolls(); // Save to persistent storage
+    savePolls();
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`✅ Weekly poll created with ID: ${pollId}`);
@@ -343,7 +338,7 @@ async function updatePollMessage(pollId) {
     const message = await channel.messages.fetch(pollData.messageId);
     if (!message) return;
 
-    const embed = createPollEmbed(pollData, pollId);
+    const embed = createPollEmbed(pollData);
     const buttons = createPollButtons(pollData.options, pollId);
 
     await message.edit({
@@ -358,12 +353,18 @@ async function updatePollMessage(pollId) {
 async function endPoll(pollId) {
   try {
     const pollData = getPollData(pollId);
-    if (!pollData) return;
+    if (!pollData) {
+      console.error('❌ Poll data not found for ID:', pollId);
+      return;
+    }
 
     const channel = client.channels.cache.get(pollData.channelId);
-    if (!channel) return;
+    if (!channel) {
+      console.error('❌ Channel not found for poll ID:', pollId);
+      return;
+    }
 
-    const resultsEmbed = createResultsEmbed(pollData, pollId);
+    const resultsEmbed = createResultsEmbed(pollData);
 
     await channel.send({
       content: '**Poll Results**',
@@ -372,7 +373,7 @@ async function endPoll(pollId) {
 
     try {
       const message = await channel.messages.fetch(pollData.messageId);
-      const embed = createPollEmbed(pollData, pollId);
+      const embed = createPollEmbed(pollData);
       embed.setColor('#ff0000');
       embed.setTitle('📊 Weekly Poll (ENDED)');
 
@@ -381,18 +382,18 @@ async function endPoll(pollId) {
         components: [], // Remove voting buttons
       });
     } catch (error) {
-      console.error('Error updating ended poll message:', error);
+      console.error('❌ Error updating ended poll message:', error);
     }
 
     activePolls.delete(pollId);
     savePolls(); // Remove ended poll from storage
-    console.log(`Poll ${pollId} has ended`);
+    console.log(`✅ Poll ${pollId} has ended`);
   } catch (error) {
-    console.error('Error ending poll:', error);
+    console.error('❌ Error ending poll:', error);
   }
 }
 
-function createResultsEmbed(pollData, pollId) {
+function createResultsEmbed(pollData) {
   const embed = new EmbedBuilder()
     .setTitle('Availability Poll Results')
     .setDescription(pollData.question)
@@ -470,7 +471,7 @@ async function createAvailabilityPoll(interaction) {
       multipleChoice: POLL_CONFIG.multipleChoice,
     };
 
-    const embed = createPollEmbed(pollData, pollId);
+    const embed = createPollEmbed(pollData);
     const buttons = createPollButtons(pollData.options, pollId);
 
     const pollMessage = await interaction.reply({
@@ -488,11 +489,11 @@ async function createAvailabilityPoll(interaction) {
     savePolls(); // Save to persistent storage
     setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
-    console.log(`Manual availability poll created with ID: ${pollId}`);
+    console.log(`✅ Manual availability poll created with ID: ${pollId}`);
   } catch (error) {
-    console.error('Error creating availability poll:', error);
+    console.error('❌ Error creating availability poll:', error);
     await interaction.reply({
-      content: 'An error occurred while creating the poll.',
+      content: '❌ An error occurred while creating the poll.',
       ephemeral: true,
     });
   }
