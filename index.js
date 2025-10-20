@@ -30,7 +30,8 @@ const activePolls = new Map();
 
 const POLL_CONFIG = {
   channelId: channelId,
-  cronSchedule: process.env.CRON_SCHEDULE || '0 12 * * 1', // Default: Mondays at 12 PM
+  // cronSchedule: process.env.CRON_SCHEDULE || '0 12 * * 1', // Default: Mondays at 12 PM
+  cronSchedule: '0 17 * * 1', // Default: Mondays at 5 PM
   pollDuration: 24 * 60 * 60 * 1000, // 24 hours
   pollQuestion: 'What days are you available this week?',
   pollOptions: [
