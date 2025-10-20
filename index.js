@@ -1,10 +1,13 @@
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { MongoClient } = require('mongodb');
+const mongoose = require('mongoose');
+const express = require('express');
+const cron = require('node-cron');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
+// Environment variables validation
 if (!process.env.BOT_TOKEN) {
   console.error('❌ BOT_TOKEN environment variable is required!');
   process.exit(1);
@@ -15,16 +18,22 @@ if (!process.env.MONGODB_URI) {
   process.exit(1);
 }
 
+if (!process.env.CHANNEL_ID) {
+  console.error('❌ CHANNEL_ID environment variable is required!');
+  process.exit(1);
+}
+
 const botToken = process.env.BOT_TOKEN;
 const mongoUri = process.env.MONGODB_URI;
-let db;
-let pollsCollection;
+const channelId = process.env.CHANNEL_ID;
+const activePolls = new Map();
 
 const POLL_CONFIG = {
-  channelId: process.env.CHANNEL_ID,
+  channelId: channelId,
+  cronSchedule: process.env.CRON_SCHEDULE || '0 12 * * 1', // Default: Mondays at 12 PM
   pollDuration: 24 * 60 * 60 * 1000, // 24 hours
-  defaultPollQuestion: 'What days are you available this week?',
-  defaultPollOptions: [
+  pollQuestion: 'What days are you available this week?',
+  pollOptions: [
     '1️⃣ Monday',
     '2️⃣ Tuesday',
     '3️⃣ Wednesday',
@@ -37,177 +46,227 @@ const POLL_CONFIG = {
   multipleChoice: true,
 };
 
-// Connect to MongoDB
-async function connectDB() {
-  try {
-    const mongoClient = new MongoClient(mongoUri);
-    await mongoClient.connect();
-    db = mongoClient.db('discord_polls');
-    pollsCollection = db.collection('polls');
+// MongoDB Schema
+const pollSchema = new mongoose.Schema({
+  pollId: { type: String, required: true, unique: true },
+  question: String,
+  options: [String],
+  votes: mongoose.Schema.Types.Mixed,
+  endTime: Number,
+  channelId: String,
+  messageId: String,
+  multipleChoice: Boolean,
+  status: { type: String, enum: ['active', 'ended'], default: 'active' },
+  createdAt: { type: Date, default: Date.now },
+});
 
-    // Create index for efficient queries
-    await pollsCollection.createIndex({ pollId: 1 });
-    await pollsCollection.createIndex({ endTime: 1 });
-    await pollsCollection.createIndex({ status: 1 });
+const Poll = mongoose.model('Poll', pollSchema);
 
-    console.log('✅ Connected to MongoDB');
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
-    process.exit(1);
+// Health check server
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.json({
+    status: 'healthy',
+    bot: client.user ? client.user.tag : 'not ready',
+    uptime: process.uptime(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    activePolls: activePolls.size,
+    cronSchedule: POLL_CONFIG.cronSchedule,
+  });
+});
+
+app.get('/health', (req, res) => {
+  const isHealthy = client.user && mongoose.connection.readyState === 1;
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? 'healthy' : 'unhealthy',
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`🏥 Health check server running on port ${PORT}`);
+});
+
+// Connect to MongoDB with retry logic
+async function connectToMongoDB(retries = 5, delay = 5000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await mongoose.connect(mongoUri);
+      console.log('✅ Connected to MongoDB');
+      return true;
+    } catch (error) {
+      console.error(`❌ MongoDB connection attempt ${i + 1}/${retries} failed:`, error.message);
+      if (i < retries - 1) {
+        console.log(`⏳ Retrying in ${delay / 1000} seconds...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
+  console.error('❌ Failed to connect to MongoDB after all retries');
+  process.exit(1);
 }
 
-// Save poll to database
-async function savePoll(pollId, pollData) {
+// Save poll to MongoDB
+async function savePollToDB(pollId, pollData) {
   try {
-    await pollsCollection.updateOne(
+    const serializedVotes = {};
+    for (const [userId, userVotes] of pollData.votes.entries()) {
+      if (pollData.multipleChoice) {
+        serializedVotes[userId] = Array.from(userVotes);
+      } else {
+        serializedVotes[userId] = userVotes;
+      }
+    }
+
+    await Poll.findOneAndUpdate(
       { pollId },
       {
-        $set: {
-          ...pollData,
-          pollId,
-          updatedAt: new Date(),
-        },
+        pollId,
+        question: pollData.question,
+        options: pollData.options,
+        votes: serializedVotes,
+        endTime: pollData.endTime,
+        channelId: pollData.channelId,
+        messageId: pollData.messageId,
+        multipleChoice: pollData.multipleChoice,
+        status: 'active',
       },
-      { upsert: true }
+      { upsert: true, new: true }
     );
   } catch (error) {
-    console.error('❌ Error saving poll:', error);
+    console.error('❌ Error saving poll to MongoDB:', error);
   }
 }
 
-// Get poll from database
-async function getPoll(pollId) {
+// Load active polls from MongoDB
+async function loadPollsFromDB() {
   try {
-    return await pollsCollection.findOne({ pollId });
+    const polls = await Poll.find({ status: 'active' });
+
+    for (const poll of polls) {
+      // Skip expired polls
+      if (Date.now() > poll.endTime) {
+        await Poll.findOneAndUpdate({ pollId: poll.pollId }, { status: 'ended' });
+        continue;
+      }
+
+      // Reconstruct Map and Set objects
+      const votes = new Map();
+      for (const [userId, userVotes] of Object.entries(poll.votes || {})) {
+        if (poll.multipleChoice) {
+          votes.set(userId, new Set(userVotes));
+        } else {
+          votes.set(userId, userVotes);
+        }
+      }
+
+      activePolls.set(poll.pollId, {
+        question: poll.question,
+        options: poll.options,
+        votes,
+        endTime: poll.endTime,
+        channelId: poll.channelId,
+        messageId: poll.messageId,
+        multipleChoice: poll.multipleChoice,
+      });
+
+      // Set up timeout for remaining duration
+      const remainingTime = poll.endTime - Date.now();
+      if (remainingTime > 0) {
+        setTimeout(() => endPoll(poll.pollId), remainingTime);
+      }
+    }
+
+    console.log(`✅ Loaded ${activePolls.size} active polls from MongoDB`);
   } catch (error) {
-    console.error('❌ Error retrieving poll:', error);
+    console.error('❌ Error loading polls from MongoDB:', error);
+  }
+}
+
+// Delete poll from MongoDB
+async function deletePollFromDB(pollId) {
+  try {
+    await Poll.findOneAndUpdate({ pollId }, { status: 'ended' });
+  } catch (error) {
+    console.error('❌ Error deleting poll from MongoDB:', error);
+  }
+}
+
+function getPollData(pollId, options = {}) {
+  const { allowExpired = false } = options;
+  const pollData = activePolls.get(pollId);
+  if (!pollData) {
+    console.log(`❌ Poll data not found for ID: ${pollId}`);
     return null;
   }
-}
-
-// Get all active polls
-async function getActivePolls() {
-  try {
-    return await pollsCollection
-      .find({
-        status: 'active',
-        endTime: { $gt: Date.now() },
-      })
-      .toArray();
-  } catch (error) {
-    console.error('❌ Error retrieving active polls:', error);
-    return [];
-  }
-}
-
-// Get polls that should end
-async function getPollsToEnd() {
-  try {
-    return await pollsCollection
-      .find({
-        status: 'active',
-        endTime: { $lte: Date.now() },
-      })
-      .toArray();
-  } catch (error) {
-    console.error('❌ Error retrieving polls to end:', error);
-    return [];
-  }
+  if (!allowExpired && Date.now() > pollData.endTime) return null;
+  return pollData;
 }
 
 client.once('ready', async () => {
   console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
 
-  await connectDB();
-  await registerAvailabilityCommand();
+  // Connect to MongoDB
+  await connectToMongoDB();
 
-  // Check for polls that need to be ended (handles bot restarts)
-  await checkAndEndPolls();
+  // Load any existing polls from MongoDB
+  await loadPollsFromDB();
 
-  // Set up periodic check every 5 minutes for polls that should end
-  setInterval(async () => {
-    await checkAndEndPolls();
-  }, 5 * 60 * 1000);
-
-  console.log('🔄 Bot is running in persistent mode');
+  // Set up cron job for automatic polls
+  if (POLL_CONFIG.channelId) {
+    console.log(`⏰ CRON schedule: ${POLL_CONFIG.cronSchedule}`);
+    cron.schedule(POLL_CONFIG.cronSchedule, async () => {
+      console.log('🕐 CRON job triggered - creating weekly poll');
+      await createWeeklyPoll();
+    });
+    console.log('✅ CRON job scheduled successfully');
+  } else {
+    console.log('⚠️ CHANNEL_ID not set - automatic polls disabled');
+  }
 });
 
-async function registerAvailabilityCommand() {
-  const { REST, Routes } = require('discord.js');
-  const rest = new REST({ version: '10' }).setToken(botToken);
-
-  const commands = [
-    {
-      name: 'availability',
-      description: 'Create a weekly availability poll',
-    },
-    {
-      name: 'endpoll',
-      description: 'Manually end an active poll',
-      options: [
-        {
-          name: 'pollid',
-          description: 'The ID of the poll to end',
-          type: 3, // STRING type
-          required: true,
-        },
-      ],
-    },
-  ];
-
+async function createWeeklyPoll() {
   try {
-    console.log('🔄 Registering commands...');
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log('✅ Commands registered successfully!');
-  } catch (error) {
-    console.error('❌ Error registering commands:', error);
-  }
-}
-
-async function createWeeklyPoll(channelId) {
-  try {
+    const channelId = POLL_CONFIG.channelId;
     if (!channelId) {
-      console.log('⚠️ Channel ID not provided.');
+      console.log('⚠️ CHANNEL_ID not configured. Skipping poll creation.');
       return null;
     }
 
     const channel = client.channels.cache.get(channelId);
     if (!channel) {
-      console.error('❌ Channel not found!');
+      console.error('❌ Channel not found! Please check your CHANNEL_ID configuration.');
       return null;
     }
 
     const pollId = Date.now().toString();
-    const endTime = Date.now() + POLL_CONFIG.pollDuration;
-
     const pollData = {
-      pollId,
-      question: POLL_CONFIG.defaultPollQuestion,
-      options: POLL_CONFIG.defaultPollOptions,
-      votes: {}, // Store as plain object for MongoDB
-      endTime,
-      channelId,
+      question: POLL_CONFIG.pollQuestion,
+      options: POLL_CONFIG.pollOptions,
+      votes: new Map(),
+      endTime: Date.now() + POLL_CONFIG.pollDuration,
+      channelId: channelId,
       multipleChoice: POLL_CONFIG.multipleChoice,
-      status: 'active',
-      createdAt: new Date(),
     };
 
     const embed = createPollEmbed(pollData);
     const buttons = createPollButtons(pollData.options, pollId);
-
     const pollMessage = await channel.send({
       content: '**Weekly Poll is Live!**',
       embeds: [embed],
       components: buttons,
     });
 
-    pollData.messageId = pollMessage.id;
-    await savePoll(pollId, pollData);
+    activePolls.set(pollId, {
+      ...pollData,
+      messageId: pollMessage.id,
+    });
+
+    await savePollToDB(pollId, { ...pollData, messageId: pollMessage.id });
+    setTimeout(() => endPoll(pollId), POLL_CONFIG.pollDuration);
 
     console.log(`✅ Weekly poll created with ID: ${pollId}`);
-    console.log(`⏰ Poll will end at: ${new Date(endTime).toLocaleString()}`);
-
     return pollId;
   } catch (error) {
     console.error('❌ Error creating weekly poll:', error);
@@ -219,7 +278,7 @@ function createPollEmbed(pollData) {
   const embed = new EmbedBuilder()
     .setTitle('📊 Weekly Availability Poll')
     .setDescription(pollData.question)
-    .setColor(pollData.status === 'ended' ? '#ff0000' : '#0099ff')
+    .setColor('#0099ff')
     .setTimestamp()
     .setFooter({
       text: `${pollData.multipleChoice ? 'Multiple choices allowed' : 'Single choice only'}`,
@@ -229,9 +288,9 @@ function createPollEmbed(pollData) {
     let voteCount = 0;
     const votersForOption = [];
 
-    Object.entries(pollData.votes || {}).forEach(([userId, userVotes]) => {
+    pollData.votes.forEach((userVotes, userId) => {
       if (pollData.multipleChoice) {
-        if (Array.isArray(userVotes) && userVotes.includes(index)) {
+        if (userVotes.has(index)) {
           voteCount++;
           votersForOption.push(`<@${userId}>`);
         }
@@ -254,7 +313,7 @@ function createPollEmbed(pollData) {
 
   const endTime = Math.floor(pollData.endTime / 1000);
   embed.addFields({
-    name: pollData.status === 'ended' ? 'Poll Ended' : 'Poll Ends',
+    name: 'Poll Ends',
     value: `<t:${endTime}:R>`,
     inline: false,
   });
@@ -295,71 +354,55 @@ async function handlePollVote(interaction, pollId, optionIndex) {
       await interaction.deferUpdate();
     }
 
-    const pollData = await getPoll(pollId);
-    if (!pollData || pollData.status !== 'active') {
-      await interaction.followUp({
-        content: '❌ This poll is no longer active.',
-        ephemeral: true,
-      });
-      return;
-    }
-
-    if (Date.now() > pollData.endTime) {
-      await interaction.followUp({
-        content: '❌ This poll has ended.',
-        ephemeral: true,
-      });
-      return;
-    }
+    const pollData = getPollData(pollId);
+    if (!pollData) return;
 
     if (
       typeof optionIndex !== 'number' ||
       Number.isNaN(optionIndex) ||
       optionIndex < 0 ||
       optionIndex >= pollData.options.length
-    ) {
+    )
       return;
-    }
 
     const userId = interaction.user.id;
-    const votes = pollData.votes || {};
 
     if (pollData.multipleChoice) {
-      if (!votes[userId]) {
-        votes[userId] = [];
+      if (!pollData.votes.has(userId)) {
+        pollData.votes.set(userId, new Set());
       }
 
-      const userVotes = votes[userId];
-      const voteIndex = userVotes.indexOf(optionIndex);
-
-      if (voteIndex > -1) {
-        userVotes.splice(voteIndex, 1);
+      const userVotes = pollData.votes.get(userId);
+      if (userVotes.has(optionIndex)) {
+        userVotes.delete(optionIndex);
       } else {
-        userVotes.push(optionIndex);
+        userVotes.add(optionIndex);
       }
 
-      if (userVotes.length === 0) {
-        delete votes[userId];
+      if (userVotes.size === 0) {
+        pollData.votes.delete(userId);
       }
     } else {
-      const previousVote = votes[userId];
+      const previousVote = pollData.votes.get(userId);
       if (previousVote === optionIndex) {
-        delete votes[userId];
+        pollData.votes.delete(userId);
       } else {
-        votes[userId] = optionIndex;
+        pollData.votes.set(userId, optionIndex);
       }
     }
 
-    pollData.votes = votes;
-    await savePoll(pollId, pollData);
-    await updatePollMessage(pollData);
+    await updatePollMessage(pollId);
+    await savePollToDB(pollId, pollData);
   } catch (error) {
     console.error('❌ Error handling poll vote:', error);
   }
 }
 
-async function updatePollMessage(pollData) {
+async function updatePollMessage(pollId) {
   try {
+    const pollData = getPollData(pollId);
+    if (!pollData) return;
+
     const channel = client.channels.cache.get(pollData.channelId);
     if (!channel) return;
 
@@ -367,7 +410,7 @@ async function updatePollMessage(pollData) {
     if (!message) return;
 
     const embed = createPollEmbed(pollData);
-    const buttons = pollData.status === 'active' ? createPollButtons(pollData.options, pollData.pollId) : [];
+    const buttons = createPollButtons(pollData.options, pollId);
 
     await message.edit({
       embeds: [embed],
@@ -378,32 +421,11 @@ async function updatePollMessage(pollData) {
   }
 }
 
-async function checkAndEndPolls() {
-  try {
-    const pollsToEnd = await getPollsToEnd();
-
-    if (pollsToEnd.length > 0) {
-      console.log(`🔍 Found ${pollsToEnd.length} poll(s) to end`);
-
-      for (const pollData of pollsToEnd) {
-        await endPoll(pollData.pollId);
-      }
-    }
-  } catch (error) {
-    console.error('❌ Error checking polls to end:', error);
-  }
-}
-
 async function endPoll(pollId) {
   try {
-    const pollData = await getPoll(pollId);
+    const pollData = getPollData(pollId, { allowExpired: true });
     if (!pollData) {
       console.error('❌ Poll data not found for ID:', pollId);
-      return;
-    }
-
-    if (pollData.status === 'ended') {
-      console.log(`⚠️ Poll ${pollId} already ended`);
       return;
     }
 
@@ -422,29 +444,20 @@ async function endPoll(pollId) {
 
     try {
       const message = await channel.messages.fetch(pollData.messageId);
-      pollData.status = 'ended';
       const embed = createPollEmbed(pollData);
+      embed.setColor('#ff0000');
       embed.setTitle('📊 Weekly Poll (ENDED)');
 
       await message.edit({
         embeds: [embed],
-        components: [], // Remove voting buttons
+        components: [],
       });
     } catch (error) {
       console.error('❌ Error updating ended poll message:', error);
     }
 
-    // Update poll status in database
-    await pollsCollection.updateOne(
-      { pollId },
-      {
-        $set: {
-          status: 'ended',
-          endedAt: new Date(),
-        },
-      }
-    );
-
+    activePolls.delete(pollId);
+    await deletePollFromDB(pollId);
     console.log(`✅ Poll ${pollId} has ended`);
   } catch (error) {
     console.error('❌ Error ending poll:', error);
@@ -453,7 +466,7 @@ async function endPoll(pollId) {
 
 function createResultsEmbed(pollData) {
   const embed = new EmbedBuilder()
-    .setTitle('📊 Availability Poll Results')
+    .setTitle('Availability Poll Results')
     .setDescription(pollData.question)
     .setColor('#00ff00')
     .setTimestamp();
@@ -461,21 +474,19 @@ function createResultsEmbed(pollData) {
   const voteCounts = new Array(pollData.options.length).fill(0);
   const votersPerOption = new Array(pollData.options.length).fill(null).map(() => []);
 
-  Object.entries(pollData.votes || {}).forEach(([userId, userVotes]) => {
+  pollData.votes.forEach((userVotes, userId) => {
     if (pollData.multipleChoice) {
-      if (Array.isArray(userVotes)) {
-        userVotes.forEach((optionIndex) => {
-          voteCounts[optionIndex]++;
-          votersPerOption[optionIndex].push(`<@${userId}>`);
-        });
-      }
+      userVotes.forEach((optionIndex) => {
+        voteCounts[optionIndex]++;
+        votersPerOption[optionIndex].push(`<@${userId}>`);
+      });
     } else {
       voteCounts[userVotes]++;
       votersPerOption[userVotes].push(`<@${userId}>`);
     }
   });
 
-  const totalVoters = Object.keys(pollData.votes || {}).length;
+  const totalVoters = pollData.votes.size;
 
   pollData.options.forEach((option, index) => {
     const votes = voteCounts[index];
@@ -500,107 +511,49 @@ function createResultsEmbed(pollData) {
 }
 
 client.on('interactionCreate', async (interaction) => {
-  // Handle button interactions (poll votes)
-  if (interaction.isButton()) {
-    const [action, pollId, optionIndex] = interaction.customId.split('_');
+  try {
+    if (interaction.isButton()) {
+      const [action, pollId, optionIndex] = interaction.customId.split('_');
 
-    if (action === 'poll') {
-      await handlePollVote(interaction, pollId, parseInt(optionIndex));
+      if (action === 'poll') {
+        await handlePollVote(interaction, pollId, parseInt(optionIndex));
+      }
+      return;
     }
-    return;
-  }
-
-  // Handle slash command interactions
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'availability') {
-      await createAvailabilityPoll(interaction);
-    } else if (interaction.commandName === 'endpoll') {
-      await handleEndPollCommand(interaction);
-    }
-    return;
+  } catch (error) {
+    console.error('❌ Error handling interaction:', error);
   }
 });
 
-async function createAvailabilityPoll(interaction) {
-  try {
-    await interaction.deferReply();
+// Error handlers
+client.on('error', (error) => {
+  console.error('❌ Discord client error:', error);
+});
 
-    const pollId = Date.now().toString();
-    const endTime = Date.now() + POLL_CONFIG.pollDuration;
+mongoose.connection.on('error', (error) => {
+  console.error('❌ MongoDB connection error:', error);
+});
 
-    const pollData = {
-      pollId,
-      question: POLL_CONFIG.defaultPollQuestion,
-      options: POLL_CONFIG.defaultPollOptions,
-      votes: {},
-      endTime,
-      channelId: interaction.channel.id,
-      multipleChoice: POLL_CONFIG.multipleChoice,
-      status: 'active',
-      createdAt: new Date(),
-    };
-
-    const embed = createPollEmbed(pollData);
-    const buttons = createPollButtons(pollData.options, pollId);
-
-    const pollMessage = await interaction.editReply({
-      content: '**Weekly Availability Poll Created!**',
-      embeds: [embed],
-      components: buttons,
-    });
-
-    pollData.messageId = pollMessage.id;
-    await savePoll(pollId, pollData);
-
-    console.log(`✅ Manual availability poll created with ID: ${pollId}`);
-  } catch (error) {
-    console.error('❌ Error creating availability poll:', error);
-    await interaction.editReply({
-      content: '❌ An error occurred while creating the poll.',
-    });
-  }
-}
-
-async function handleEndPollCommand(interaction) {
-  try {
-    const pollId = interaction.options.getString('pollid');
-
-    await interaction.deferReply({ ephemeral: true });
-
-    const pollData = await getPoll(pollId);
-    if (!pollData) {
-      await interaction.editReply({
-        content: '❌ Poll not found with that ID.',
-      });
-      return;
-    }
-
-    if (pollData.status === 'ended') {
-      await interaction.editReply({
-        content: '❌ This poll has already ended.',
-      });
-      return;
-    }
-
-    await endPoll(pollId);
-    await interaction.editReply({
-      content: `✅ Poll ${pollId} has been ended successfully!`,
-    });
-  } catch (error) {
-    console.error('❌ Error ending poll manually:', error);
-    await interaction.editReply({
-      content: '❌ An error occurred while ending the poll.',
-    });
-  }
-}
-
-client.on('error', console.error);
+mongoose.connection.on('disconnected', () => {
+  console.log('⚠️ MongoDB disconnected. Attempting to reconnect...');
+});
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-  console.log('⚠️ SIGTERM received, shutting down gracefully...');
+  console.log('📴 SIGTERM received, shutting down gracefully...');
   client.destroy();
+  await mongoose.connection.close();
   process.exit(0);
 });
 
-client.login(botToken);
+process.on('SIGINT', async () => {
+  console.log('📴 SIGINT received, shutting down gracefully...');
+  client.destroy();
+  await mongoose.connection.close();
+  process.exit(0);
+});
+
+client.login(botToken).catch((error) => {
+  console.error('❌ Failed to login to Discord:', error);
+  process.exit(1);
+});
