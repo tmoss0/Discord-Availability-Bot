@@ -31,7 +31,7 @@ const activePolls = new Map();
 const POLL_CONFIG = {
   channelId: channelId,
   // cronSchedule: process.env.CRON_SCHEDULE || '0 12 * * 1', // Default: Mondays at 12 PM
-  cronSchedule: '10 17 * * 1', // Default: Mondays at 5 PM
+  cronSchedule: ' 17 * * 2', // Default: Tuesdays at 5 PM
   pollDuration: 24 * 60 * 60 * 1000, // 24 hours
   pollQuestion: 'What days are you available this week?',
   pollOptions: [
@@ -213,6 +213,9 @@ client.once('ready', async () => {
 
   // Load any existing polls from MongoDB
   await loadPollsFromDB();
+
+  // Register slash commands
+  await registerTestCommand();
 
   // Set up cron job for automatic polls
   if (POLL_CONFIG.channelId) {
@@ -511,6 +514,306 @@ function createResultsEmbed(pollData) {
   return embed;
 }
 
+// Command Handlers
+async function handleTestPollCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const pollId = await createWeeklyPoll();
+    if (pollId) {
+      await interaction.editReply({
+        content: `✅ Test poll created successfully with ID: \`${pollId}\``,
+      });
+    } else {
+      await interaction.editReply({
+        content: '❌ Failed to create test poll. Check console logs for details.',
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error in handleTestPollCommand:', error);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.editReply({
+        content: '❌ An error occurred while creating the test poll.',
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred while creating the test poll.',
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+async function handleDeletePollCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const pollId = interaction.options.getString('poll_id');
+    
+    // Check if poll exists in memory
+    const pollData = getPollData(pollId, { allowExpired: true });
+    if (!pollData) {
+      // Check if poll exists in database
+      const dbPoll = await Poll.findOne({ pollId });
+      if (!dbPoll) {
+        await interaction.editReply({
+          content: `❌ Poll with ID \`${pollId}\` not found.`,
+        });
+        return;
+      }
+      
+      // Delete from database only
+      await Poll.findOneAndUpdate({ pollId }, { status: 'ended' });
+      await interaction.editReply({
+        content: `✅ Poll \`${pollId}\` marked as ended in database.`,
+      });
+      return;
+    }
+    
+    // Remove from memory
+    activePolls.delete(pollId);
+    
+    // Mark as ended in database
+    await deletePollFromDB(pollId);
+    
+    // Try to update the poll message to show it's ended
+    try {
+      const channel = client.channels.cache.get(pollData.channelId);
+      if (channel && pollData.messageId) {
+        const message = await channel.messages.fetch(pollData.messageId);
+        const embed = createPollEmbed(pollData);
+        embed.setColor('#ff0000');
+        embed.setTitle('📊 Weekly Poll (ENDED)');
+        
+        await message.edit({
+          embeds: [embed],
+          components: [],
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error updating poll message:', error);
+    }
+    
+    await interaction.editReply({
+      content: `✅ Poll \`${pollId}\` deleted successfully.`,
+    });
+  } catch (error) {
+    console.error('❌ Error in handleDeletePollCommand:', error);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.editReply({
+        content: '❌ An error occurred while deleting the poll.',
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred while deleting the poll.',
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+async function handleCleanPollsCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    // Remove all ended polls from database
+    const result = await Poll.deleteMany({ status: 'ended' });
+    
+    await interaction.editReply({
+      content: `✅ Cleaned up ${result.deletedCount} ended polls from database.`,
+    });
+  } catch (error) {
+    console.error('❌ Error in handleCleanPollsCommand:', error);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.editReply({
+        content: '❌ An error occurred while cleaning polls.',
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred while cleaning polls.',
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+async function handleListPollsCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const activePollsList = Array.from(activePolls.entries()).map(([pollId, pollData]) => {
+      const endTime = Math.floor(pollData.endTime / 1000);
+      const remainingTime = pollData.endTime - Date.now();
+      const status = remainingTime > 0 ? 'Active' : 'Expired';
+      
+      return `**Poll ID:** \`${pollId}\`\n` +
+             `**Status:** ${status}\n` +
+             `**Ends:** <t:${endTime}:R>\n` +
+             `**Votes:** ${pollData.votes.size}\n`;
+    });
+    
+    if (activePollsList.length === 0) {
+      await interaction.editReply({
+        content: '📋 No active polls found.',
+      });
+      return;
+    }
+    
+    const embed = new EmbedBuilder()
+      .setTitle('📋 Active Polls')
+      .setColor('#0099ff')
+      .setTimestamp();
+    
+    // Split into chunks if too long
+    let description = activePollsList.join('\n');
+    if (description.length > 4096) {
+      description = activePollsList.slice(0, 5).join('\n') + `\n... and ${activePollsList.length - 5} more polls`;
+    }
+    
+    embed.setDescription(description);
+    
+    await interaction.editReply({
+      embeds: [embed],
+    });
+  } catch (error) {
+    console.error('❌ Error in handleListPollsCommand:', error);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.editReply({
+        content: '❌ An error occurred while listing polls.',
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred while listing polls.',
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+async function handleForceEndPollCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const pollId = interaction.options.getString('poll_id');
+    
+    const pollData = getPollData(pollId, { allowExpired: true });
+    if (!pollData) {
+      await interaction.editReply({
+        content: `❌ Poll with ID \`${pollId}\` not found.`,
+      });
+      return;
+    }
+    
+    // Force end the poll immediately
+    await endPoll(pollId);
+    
+    await interaction.editReply({
+      content: `✅ Poll \`${pollId}\` force ended successfully.`,
+    });
+  } catch (error) {
+    console.error('❌ Error in handleForceEndPollCommand:', error);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.editReply({
+        content: '❌ An error occurred while force ending the poll.',
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred while force ending the poll.',
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+async function handleClearAllPollsCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const activePollsCount = activePolls.size;
+    
+    // Clear all polls from memory
+    activePolls.clear();
+    
+    // Mark all active polls as ended in database
+    const result = await Poll.updateMany({ status: 'active' }, { status: 'ended' });
+    
+    await interaction.editReply({
+      content: `⚠️ **DANGEROUS OPERATION COMPLETED**\n` +
+               `✅ Cleared ${activePollsCount} polls from memory\n` +
+               `✅ Marked ${result.modifiedCount} polls as ended in database\n` +
+               `⚠️ All poll data has been cleared!`,
+    });
+  } catch (error) {
+    console.error('❌ Error in handleClearAllPollsCommand:', error);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.editReply({
+        content: '❌ An error occurred while clearing all polls.',
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred while clearing all polls.',
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+async function registerTestCommand() {
+  const { REST, Routes } = require('discord.js');
+  const rest = new REST({ version: '10' }).setToken(botToken);
+
+  const commands = [
+    {
+      name: 'test-poll',
+      description: '🧪 [DEV ONLY] Manually trigger poll creation for testing',
+    },
+    {
+      name: 'delete-poll',
+      description: '🗑️ Delete a specific poll from the database',
+      options: [
+        {
+          name: 'poll_id',
+          type: 3, // STRING
+          description: 'The poll ID to delete (check logs or health endpoint)',
+          required: true,
+        },
+      ],
+    },
+    {
+      name: 'clean-polls',
+      description: '🧹 Remove all ended polls from the database',
+    },
+    {
+      name: 'list-polls',
+      description: '📋 List all active polls',
+    },
+    {
+      name: 'force-end-poll',
+      description: '⏹️ Force end a specific active poll immediately',
+      options: [
+        {
+          name: 'poll_id',
+          type: 3, // STRING
+          description: 'The poll ID to force end',
+          required: true,
+        },
+      ],
+    },
+    {
+      name: 'clear-all-polls',
+      description: '🗑️ Clear all poll data from memory and database (DANGEROUS)',
+    },
+  ];
+
+  try {
+    console.log('🔄 Registering test command...');
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    console.log('✅ Test commands registered successfully!');
+  } catch (error) {
+    console.error('❌ Error registering test command:', error);
+  }
+}
+
 client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isButton()) {
@@ -521,8 +824,38 @@ client.on('interactionCreate', async (interaction) => {
       }
       return;
     }
+
+    if (interaction.isChatInputCommand()) {
+      const { commandName } = interaction;
+
+      switch (commandName) {
+        case 'test-poll':
+          await handleTestPollCommand(interaction);
+          break;
+        case 'delete-poll':
+          await handleDeletePollCommand(interaction);
+          break;
+        case 'clean-polls':
+          await handleCleanPollsCommand(interaction);
+          break;
+        case 'list-polls':
+          await handleListPollsCommand(interaction);
+          break;
+        case 'force-end-poll':
+          await handleForceEndPollCommand(interaction);
+          break;
+        case 'clear-all-polls':
+          await handleClearAllPollsCommand(interaction);
+          break;
+        default:
+          await interaction.reply({ content: '❌ Unknown command!', ephemeral: true });
+      }
+    }
   } catch (error) {
     console.error('❌ Error handling interaction:', error);
+    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: '❌ An error occurred while processing your request.', ephemeral: true });
+    }
   }
 });
 
