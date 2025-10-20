@@ -57,7 +57,7 @@ function savePolls() {
     }
     fs.writeFileSync(POLLS_FILE, JSON.stringify(pollsData, null, 2));
   } catch (error) {
-    console.error('Error saving polls:', error);
+    console.error('❌ Error saving polls:', error);
   }
 }
 
@@ -95,17 +95,21 @@ function loadPolls() {
         }
       }
 
-      console.log(`Loaded ${activePolls.size} active polls from storage`);
+      console.log(`✅ Loaded ${activePolls.size} active polls from storage`);
     }
   } catch (error) {
-    console.error('Error loading polls:', error);
+    console.error('❌ Error loading polls:', error);
   }
 }
 
-function getPollData(pollId) {
+function getPollData(pollId, options = {}) {
+  const { allowExpired = false } = options;
   const pollData = activePolls.get(pollId);
-  if (!pollData) return null;
-  if (Date.now() > pollData.endTime) return null;
+  if (!pollData) {
+    console.log(`❌ Poll data not found for ID: ${pollId}`);
+    return null;
+  }
+  if (!allowExpired && Date.now() > pollData.endTime) return null;
   return pollData;
 }
 
@@ -352,7 +356,7 @@ async function updatePollMessage(pollId) {
 
 async function endPoll(pollId) {
   try {
-    const pollData = getPollData(pollId);
+    const pollData = getPollData(pollId, { allowExpired: true });
     if (!pollData) {
       console.error('❌ Poll data not found for ID:', pollId);
       return;
