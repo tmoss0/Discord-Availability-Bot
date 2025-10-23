@@ -26,12 +26,13 @@ if (!process.env.CHANNEL_ID) {
 const botToken = process.env.BOT_TOKEN;
 const mongoUri = process.env.MONGODB_URI;
 const channelId = process.env.CHANNEL_ID;
+const cronSchedule = process.env.CRON_SCHEDULE || '0 12 * * 1';
+
 const activePolls = new Map();
 
 const POLL_CONFIG = {
   channelId: channelId,
-  // cronSchedule: process.env.CRON_SCHEDULE || '0 12 * * 1', // Default: Mondays at 12 PM
-  cronSchedule: '0 17 * * 2', // Default: Tuesdays at 5 PM
+  cronSchedule: cronSchedule,
   pollDuration: 24 * 60 * 60 * 1000, // 24 hours
   pollQuestion: 'What days are you available this week?',
   pollOptions: [
@@ -515,35 +516,6 @@ function createResultsEmbed(pollData) {
 }
 
 // Command Handlers
-async function handleTestPollCommand(interaction) {
-  try {
-    await interaction.deferReply({ ephemeral: true });
-    
-    const pollId = await createWeeklyPoll();
-    if (pollId) {
-      await interaction.editReply({
-        content: `✅ Test poll created successfully with ID: \`${pollId}\``,
-      });
-    } else {
-      await interaction.editReply({
-        content: '❌ Failed to create test poll. Check console logs for details.',
-      });
-    }
-  } catch (error) {
-    console.error('❌ Error in handleTestPollCommand:', error);
-    if (interaction.replied || interaction.deferred) {
-      await interaction.editReply({
-        content: '❌ An error occurred while creating the test poll.',
-      });
-    } else {
-      await interaction.reply({
-        content: '❌ An error occurred while creating the test poll.',
-        ephemeral: true,
-      });
-    }
-  }
-}
-
 async function handleDeletePollCommand(interaction) {
   try {
     await interaction.deferReply({ ephemeral: true });
@@ -764,10 +736,6 @@ async function registerTestCommand() {
 
   const commands = [
     {
-      name: 'test-poll',
-      description: '🧪 [DEV ONLY] Manually trigger poll creation for testing',
-    },
-    {
       name: 'delete-poll',
       description: '🗑️ Delete a specific poll from the database',
       options: [
@@ -829,9 +797,6 @@ client.on('interactionCreate', async (interaction) => {
       const { commandName } = interaction;
 
       switch (commandName) {
-        case 'test-poll':
-          await handleTestPollCommand(interaction);
-          break;
         case 'delete-poll':
           await handleDeletePollCommand(interaction);
           break;
