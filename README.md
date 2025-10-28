@@ -51,7 +51,7 @@ The bot creates polls with the following options:
    BOT_TOKEN=your_discord_bot_token
    MONGODB_URI=your_mongodb_connection_string
    CHANNEL_ID=your_target_channel_id
-   CRON_SCHEDULE=CRON timing when to execute the bot (defaults to 0 12 * * 1, Monday 8 AM EST)
+   CRON_SCHEDULE=default: 0 12 * * 1 (Monday at 8:00 AM EST)
    PORT=3000
    ```
 
@@ -59,7 +59,7 @@ The bot creates polls with the following options:
    - `BOT_TOKEN`: Your Discord bot token from the Discord Developer Portal
    - `MONGODB_URI`: MongoDB connection string (e.g., `mongodb://localhost:27017/discord-bot`)
    - `CHANNEL_ID`: Discord channel ID where polls will be posted
-   - `CRON_SCHEDULE`: see Cron Schedule Format below (default: `0 12 * * 1` = Mondays at 12:00 PM)
+   - `CRON_SCHEDULE`: see Cron Schedule Format below (default: `0 12 * * 1` = Monday at 8:00 AM EST)
    - `PORT`: Port for health check server (default: 3000)
 
 ## Usage
